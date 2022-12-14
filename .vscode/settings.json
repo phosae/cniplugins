@@ -1,0 +1,10 @@
+{
+    "go.inferGopath": false,
+    "gopls": {
+        "env": {}
+    },
+    "go.toolsEnvVars": {
+        "GOOS": "linux",
+        "GOARCH": "arm64"
+    }
+}
