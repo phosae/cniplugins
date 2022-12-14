@@ -129,21 +129,6 @@ func getMTU(deviceName string) (int, error) {
 	return link.Attrs().MTU, nil
 }
 
-// get the interface in container namespace
-func getContainerInterface(interfaces []*current.Interface, containerIfName string, netns ns.NetNS) (*current.Interface, error) {
-	if len(interfaces) == 0 {
-		return nil, fmt.Errorf("no interfaces provided")
-	}
-
-	for _, iface := range interfaces {
-		if iface.Sandbox != "" && iface.Name == containerIfName {
-			return iface, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no veth peer of container interface found in host ns")
-}
-
 func cmdAdd(args *skel.CmdArgs) error {
 	conf, err := parseConfig(args.StdinData)
 	if err != nil {
@@ -170,43 +155,52 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 	defer netns.Close()
 
-	ctrInterface, err := getContainerInterface(result.Interfaces, args.IfName, netns)
-	if err != nil {
+	var ctrDevice netlink.Link
+	err = netns.Do(func(_ ns.NetNS) error {
+		ctrDevice, err = netlink.LinkByName(args.IfName)
 		return err
+	})
+	if err != nil {
+		return fmt.Errorf("failed get container device %q: %v", netns, err)
 	}
 
 	if bandwidth.IngressRate > 0 && bandwidth.IngressBurst > 0 {
-		err = CreateIngressQdisc(bandwidth.IngressRate, bandwidth.IngressBurst, ctrInterface.Name)
+		err = netns.Do(func(_ ns.NetNS) error {
+			return createTBF(bandwidth.IngressRate, bandwidth.IngressBurst, ctrDevice.Attrs().Index)
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed set ingress traffic shaping on container device %q: %v", netns, err)
 		}
 	}
 
 	if bandwidth.EgressRate > 0 && bandwidth.EgressBurst > 0 {
-		mtu, err := getMTU(ctrInterface.Name)
-		if err != nil {
-			return err
-		}
-
 		ifbDeviceName := getIfbDeviceName(conf.Name, args.ContainerID)
 
-		err = CreateIfb(ifbDeviceName, mtu)
+		err = netns.Do(func(_ ns.NetNS) error {
+			return CreateIfb(ifbDeviceName, ctrDevice.Attrs().MTU)
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create ifb device in container ns/%q: %v", netns, err)
 		}
 
-		ifbDevice, err := netlink.LinkByName(ifbDeviceName)
-		if err != nil {
+		var ifbDevice netlink.Link
+		err = netns.Do(func(_ ns.NetNS) error {
+			ifbDevice, err = netlink.LinkByName(ifbDeviceName)
 			return err
+		})
+		if err != nil {
+			return fmt.Errorf("failed to get ifb device in container ns/%q: %v", netns, err)
 		}
 
 		result.Interfaces = append(result.Interfaces, &current.Interface{
 			Name: ifbDeviceName,
 			Mac:  ifbDevice.Attrs().HardwareAddr.String(),
 		})
-		err = CreateEgressQdisc(bandwidth.EgressRate, bandwidth.EgressBurst, ctrInterface.Name, ifbDeviceName)
+		err = netns.Do(func(_ ns.NetNS) error {
+			return CreateEgressQdisc(bandwidth.EgressRate, bandwidth.EgressBurst, args.IfName, ifbDeviceName)
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("err CreateEgressQdisc in container ns/%q: %v", netns, err)
 		}
 	}
 
@@ -219,10 +213,18 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 
+	netns, err := ns.GetNS(args.Netns)
+	if err != nil {
+		return fmt.Errorf("failed to open netns %q: %v", netns, err)
+	}
+	defer netns.Close()
+
 	ifbDeviceName := getIfbDeviceName(conf.Name, args.ContainerID)
 
-	if err := TeardownIfb(ifbDeviceName); err != nil {
-		return err
+	if err := netns.Do(func(_ ns.NetNS) error {
+		return TeardownIfb(ifbDeviceName)
+	}); err != nil {
+		return fmt.Errorf("err TeardownIfb in container ns %q: %v", netns, err)
 	}
 
 	return nil
@@ -259,7 +261,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 		return fmt.Errorf("must be called as a chained plugin")
 	}
 
-	result, err := current.NewResultFromResult(bwConf.PrevResult)
+	_, err = current.NewResultFromResult(bwConf.PrevResult)
 	if err != nil {
 		return fmt.Errorf("could not convert result to current version: %v", err)
 	}
@@ -270,13 +272,12 @@ func cmdCheck(args *skel.CmdArgs) error {
 	}
 	defer netns.Close()
 
-	ctrInterface, err := getContainerInterface(result.Interfaces, args.IfName, netns)
-	if err != nil {
+	var link netlink.Link
+	if err = netns.Do(func(_ ns.NetNS) error {
+		link, err = netlink.LinkByName(args.IfName)
 		return err
-	}
-	link, err := netlink.LinkByName(ctrInterface.Name)
-	if err != nil {
-		return err
+	}); err != nil {
+		return fmt.Errorf("failed get container device %q: %v", netns, err)
 	}
 
 	bandwidth := getBandwidth(bwConf)
@@ -288,8 +289,11 @@ func cmdCheck(args *skel.CmdArgs) error {
 		latency := latencyInUsec(latencyInMillis)
 		limitInBytes := limit(uint64(rateInBytes), latency, uint32(burstInBytes))
 
-		qdiscs, err := SafeQdiscList(link)
-		if err != nil {
+		var qdiscs []netlink.Qdisc
+		if err = netns.Do(func(_ ns.NetNS) error {
+			qdiscs, err = SafeQdiscList(link)
+			return err
+		}); err != nil {
 			return err
 		}
 		if len(qdiscs) == 0 {
@@ -322,13 +326,19 @@ func cmdCheck(args *skel.CmdArgs) error {
 
 		ifbDeviceName := getIfbDeviceName(bwConf.Name, args.ContainerID)
 
-		ifbDevice, err := netlink.LinkByName(ifbDeviceName)
-		if err != nil {
+		var ifbDevice netlink.Link
+		if netns.Do(func(_ ns.NetNS) error {
+			ifbDevice, err = netlink.LinkByName(ifbDeviceName)
+			return err
+		}); err != nil {
 			return fmt.Errorf("get ifb device: %s", err)
 		}
 
-		qdiscs, err := SafeQdiscList(ifbDevice)
-		if err != nil {
+		var qdiscs []netlink.Qdisc
+		if netns.Do(func(_ ns.NetNS) error {
+			qdiscs, err = SafeQdiscList(ifbDevice)
+			return err
+		}); err != nil {
 			return err
 		}
 		if len(qdiscs) == 0 {

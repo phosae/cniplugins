@@ -58,20 +58,20 @@ func CreateIngressQdisc(rateInBits, burstInBits uint64, hostDeviceName string) e
 	return createTBF(rateInBits, burstInBits, hostDevice.Attrs().Index)
 }
 
-func CreateEgressQdisc(rateInBits, burstInBits uint64, hostDeviceName string, ifbDeviceName string) error {
+func CreateEgressQdisc(rateInBits, burstInBits uint64, deviceToShape string, ifbDeviceName string) error {
 	ifbDevice, err := netlink.LinkByName(ifbDeviceName)
 	if err != nil {
 		return fmt.Errorf("get ifb device: %s", err)
 	}
-	hostDevice, err := netlink.LinkByName(hostDeviceName)
+	targetDevice, err := netlink.LinkByName(deviceToShape)
 	if err != nil {
 		return fmt.Errorf("get host device: %s", err)
 	}
 
-	// add qdisc ingress on host device
+	// add qdisc ingress on target device
 	ingress := &netlink.Ingress{
 		QdiscAttrs: netlink.QdiscAttrs{
-			LinkIndex: hostDevice.Attrs().Index,
+			LinkIndex: targetDevice.Attrs().Index,
 			Handle:    netlink.MakeHandle(0xffff, 0), // ffff:
 			Parent:    netlink.HANDLE_INGRESS,
 		},
@@ -82,10 +82,10 @@ func CreateEgressQdisc(rateInBits, burstInBits uint64, hostDeviceName string, if
 		return fmt.Errorf("create ingress qdisc: %s", err)
 	}
 
-	// add filter on host device to mirror traffic to ifb device
+	// add filter on target device to mirror traffic to ifb device
 	filter := &netlink.U32{
 		FilterAttrs: netlink.FilterAttrs{
-			LinkIndex: hostDevice.Attrs().Index,
+			LinkIndex: targetDevice.Attrs().Index,
 			Parent:    ingress.QdiscAttrs.Handle,
 			Priority:  1,
 			Protocol:  syscall.ETH_P_ALL,
