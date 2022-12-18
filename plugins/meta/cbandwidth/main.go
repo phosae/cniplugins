@@ -164,16 +164,17 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return fmt.Errorf("failed get container device %q: %v", netns, err)
 	}
 
-	if bandwidth.IngressRate > 0 && bandwidth.IngressBurst > 0 {
+	// since we do traffic sharp in container, what is egress from container is egress
+	if bandwidth.EgressRate > 0 && bandwidth.EgressBurst > 0 {
 		err = netns.Do(func(_ ns.NetNS) error {
-			return createTBF(bandwidth.IngressRate, bandwidth.IngressBurst, ctrDevice.Attrs().Index)
+			return createTBF(bandwidth.EgressRate, bandwidth.EgressBurst, ctrDevice.Attrs().Index)
 		})
 		if err != nil {
-			return fmt.Errorf("failed set ingress traffic shaping on container device %q: %v", netns, err)
+			return fmt.Errorf("failed set egress traffic shaping on container device %q: %v", netns, err)
 		}
 	}
 
-	if bandwidth.EgressRate > 0 && bandwidth.EgressBurst > 0 {
+	if bandwidth.IngressRate > 0 && bandwidth.IngressBurst > 0 {
 		ifbDeviceName := getIfbDeviceName(conf.Name, args.ContainerID)
 
 		err = netns.Do(func(_ ns.NetNS) error {
@@ -197,10 +198,11 @@ func cmdAdd(args *skel.CmdArgs) error {
 			Mac:  ifbDevice.Attrs().HardwareAddr.String(),
 		})
 		err = netns.Do(func(_ ns.NetNS) error {
-			return CreateEgressQdisc(bandwidth.EgressRate, bandwidth.EgressBurst, args.IfName, ifbDeviceName)
+			// what is egress from `ifb` is ingress to container device
+			return CreateEgressQdisc(bandwidth.IngressRate, bandwidth.IngressBurst, args.IfName, ifbDeviceName)
 		})
 		if err != nil {
-			return fmt.Errorf("err CreateEgressQdisc in container ns/%q: %v", netns, err)
+			return fmt.Errorf("err set ingress traffic shaping in container ns/%q: %v", netns, err)
 		}
 	}
 
