@@ -284,9 +284,9 @@ func cmdCheck(args *skel.CmdArgs) error {
 
 	bandwidth := getBandwidth(bwConf)
 
-	if bandwidth.IngressRate > 0 && bandwidth.IngressBurst > 0 {
-		rateInBytes := bandwidth.IngressRate / 8
-		burstInBytes := bandwidth.IngressBurst / 8
+	if bandwidth.EgressRate > 0 && bandwidth.EgressBurst > 0 {
+		rateInBytes := bandwidth.EgressRate / 8
+		burstInBytes := bandwidth.EgressBurst / 8
 		bufferInBytes := buffer(uint64(rateInBytes), uint32(burstInBytes))
 		latency := latencyInUsec(latencyInMillis)
 		limitInBytes := limit(uint64(rateInBytes), latency, uint32(burstInBytes))
@@ -319,9 +319,9 @@ func cmdCheck(args *skel.CmdArgs) error {
 		}
 	}
 
-	if bandwidth.EgressRate > 0 && bandwidth.EgressBurst > 0 {
-		rateInBytes := bandwidth.EgressRate / 8
-		burstInBytes := bandwidth.EgressBurst / 8
+	if bandwidth.IngressRate > 0 && bandwidth.IngressBurst > 0 {
+		rateInBytes := bandwidth.IngressRate / 8
+		burstInBytes := bandwidth.IngressBurst / 8
 		bufferInBytes := buffer(uint64(rateInBytes), uint32(burstInBytes))
 		latency := latencyInUsec(latencyInMillis)
 		limitInBytes := limit(uint64(rateInBytes), latency, uint32(burstInBytes))
