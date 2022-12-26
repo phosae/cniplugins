@@ -116,8 +116,8 @@ func validateRateAndBurst(rate, burst uint64) error {
 	return nil
 }
 
-func getIfbDeviceName(networkName string, containerId string) string {
-	return utils.MustFormatHashWithPrefix(maxIfbDeviceLength, ifbDevicePrefix, networkName+containerId)
+func getIfbDeviceName(networkName string, containerId string, ifname string) string {
+	return utils.MustFormatHashWithPrefix(maxIfbDeviceLength, ifbDevicePrefix, networkName+containerId+ifname)
 }
 
 func getMTU(deviceName string) (int, error) {
@@ -175,7 +175,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	if bandwidth.IngressRate > 0 && bandwidth.IngressBurst > 0 {
-		ifbDeviceName := getIfbDeviceName(conf.Name, args.ContainerID)
+		ifbDeviceName := getIfbDeviceName(conf.Name, args.ContainerID, args.IfName)
 
 		err = netns.Do(func(_ ns.NetNS) error {
 			return CreateIfb(ifbDeviceName, ctrDevice.Attrs().MTU)
@@ -221,7 +221,7 @@ func cmdDel(args *skel.CmdArgs) error {
 	}
 	defer netns.Close()
 
-	ifbDeviceName := getIfbDeviceName(conf.Name, args.ContainerID)
+	ifbDeviceName := getIfbDeviceName(conf.Name, args.ContainerID, args.IfName)
 
 	if err := netns.Do(func(_ ns.NetNS) error {
 		return TeardownIfb(ifbDeviceName)
@@ -326,7 +326,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 		latency := latencyInUsec(latencyInMillis)
 		limitInBytes := limit(uint64(rateInBytes), latency, uint32(burstInBytes))
 
-		ifbDeviceName := getIfbDeviceName(bwConf.Name, args.ContainerID)
+		ifbDeviceName := getIfbDeviceName(bwConf.Name, args.ContainerID, args.IfName)
 
 		var ifbDevice netlink.Link
 		if netns.Do(func(_ ns.NetNS) error {
